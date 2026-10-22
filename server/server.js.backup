@@ -1,0 +1,460 @@
+import "dotenv/config";
+import express from "express";
+import Database from "better-sqlite3";
+import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = Number(process.env.PORT || 5000);
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// Check that the private signing key exists.
+if (!JWT_SECRET) {
+  console.error("Error: JWT_SECRET is missing from .env");
+  process.exit(1);
+}
+
+// Middleware
+app.use(cors());
+app.use(express.json({ limit: "20kb" }));
+
+// Connect to the existing SQLite database.
+// Do not delete salon.db: it contains your saved data.
+const db = new Database(
+  path.join(__dirname, "salon.db")
+);
+
+db.pragma("foreign_keys = ON");
+
+// Create services table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS services (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    price REAL NOT NULL,
+    image TEXT,
+    duration_minutes INTEGER DEFAULT 60
+  );
+`);
+
+// Create customers table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS customers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    email TEXT
+  );
+`);
+
+// Create appointments table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS appointments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER NOT NULL,
+    service_id INTEGER NOT NULL,
+    appointment_date TEXT NOT NULL,
+    appointment_time TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    FOREIGN KEY (customer_id) REFERENCES customers(id),
+    FOREIGN KEY (service_id) REFERENCES services(id)
+  );
+`);
+
+// Create offers table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS offers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    discount_percentage REAL DEFAULT 0,
+    active INTEGER DEFAULT 1
+  );
+`);
+
+// Public backend test
+app.get("/", (req, res) => {
+  res.send("SalonHub backend is running!");
+});
+
+// Public: Get salon services
+app.get("/api/services", (req, res) => {
+  try {
+    const services = db.prepare(`
+      SELECT *
+      FROM services
+      ORDER BY name
+    `).all();
+
+    res.json(services);
+  } catch (error) {
+    console.error("Error loading services:", error);
+
+    res.status(500).json({
+      error: "Could not load salon services."
+    });
+  }
+});
+
+// Owner login
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body ?? {};
+
+    const ownerEmail = process.env.OWNER_EMAIL;
+    const ownerPasswordHash = process.env.OWNER_PASSWORD_HASH;
+
+    if (!ownerEmail || !ownerPasswordHash) {
+      return res.status(503).json({
+        error: "Owner login has not been configured."
+      });
+    }
+
+    if (
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !email.trim() ||
+      !password
+    ) {
+      return res.status(400).json({
+        error: "Please enter your email and password."
+      });
+    }
+
+    const emailMatches =
+      email.trim().toLowerCase() ===
+      ownerEmail.trim().toLowerCase();
+
+    const passwordMatches = await bcrypt.compare(
+      password,
+      ownerPasswordHash
+    );
+
+    if (!emailMatches || !passwordMatches) {
+      return res.status(401).json({
+        error: "Invalid email or password."
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        role: "owner",
+        email: ownerEmail
+      },
+      JWT_SECRET,
+      {
+        expiresIn: "2h"
+      }
+    );
+
+    return res.json({
+      message: "Owner login successful.",
+      token,
+      owner: {
+        email: ownerEmail
+      }
+    });
+  } catch (error) {
+    console.error("Owner login error:", error);
+
+    return res.status(500).json({
+      error: "Could not complete login."
+    });
+  }
+});
+
+// Authentication middleware
+function requireOwner(req, res, next) {
+  try {
+    const authorization = req.headers.authorization;
+
+    if (
+      typeof authorization !== "string" ||
+      !authorization.startsWith("Bearer ")
+    ) {
+      return res.status(401).json({
+        error: "Please log in as the salon owner."
+      });
+    }
+
+    const token = authorization.slice(7);
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    if (
+      typeof decoded !== "object" ||
+      decoded.role !== "owner"
+    ) {
+      return res.status(403).json({
+        error: "Owner access is required."
+      });
+    }
+
+    req.owner = decoded;
+    next();
+  } catch {
+    return res.status(401).json({
+      error: "Your session is invalid or expired. Please log in again."
+    });
+  }
+}
+
+// Public: Create a new appointment
+app.post("/api/appointments", (req, res) => {
+  try {
+    const {
+      customerName,
+      phone,
+      email,
+      serviceId,
+      appointmentDate,
+      appointmentTime
+    } = req.body ?? {};
+
+    // Validate required fields
+    if (
+      typeof customerName !== "string" ||
+      !customerName.trim() ||
+      typeof phone !== "string" ||
+      !phone.trim() ||
+      !serviceId ||
+      !appointmentDate ||
+      !appointmentTime
+    ) {
+      return res.status(400).json({
+        error: "Please fill in all required booking fields."
+      });
+    }
+
+    // Validate date and time formats
+    if (
+      typeof appointmentDate !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(appointmentDate) ||
+      typeof appointmentTime !== "string" ||
+      !/^\d{2}:\d{2}$/.test(appointmentTime)
+    ) {
+      return res.status(400).json({
+        error: "Please provide a valid appointment date and time."
+      });
+    }
+
+    // Validate that the date actually exists
+    const parsedDate = new Date(
+      `${appointmentDate}T00:00:00Z`
+    );
+
+    if (
+      Number.isNaN(parsedDate.getTime()) ||
+      parsedDate.toISOString().slice(0, 10) !== appointmentDate
+    ) {
+      return res.status(400).json({
+        error: "Please provide a valid appointment date."
+      });
+    }
+
+    // Validate time
+    const [hours, minutes] = appointmentTime
+      .split(":")
+      .map(Number);
+
+    if (hours > 23 || minutes > 59) {
+      return res.status(400).json({
+        error: "Please provide a valid appointment time."
+      });
+    }
+
+    // Compare dates using the server's local calendar date
+    const today = new Date();
+    const localToday = [
+      today.getFullYear(),
+      String(today.getMonth() + 1).padStart(2, "0"),
+      String(today.getDate()).padStart(2, "0")
+    ].join("-");
+
+    if (appointmentDate < localToday) {
+      return res.status(400).json({
+        error: "Please choose today or a future date."
+      });
+    }
+
+    // Check that the service exists
+    const service = db.prepare(`
+      SELECT id
+      FROM services
+      WHERE id = ?
+    `).get(Number(serviceId));
+
+    if (!service) {
+      return res.status(400).json({
+        error: "The selected salon service does not exist."
+      });
+    }
+
+    // Prevent double booking
+    const existingAppointment = db.prepare(`
+      SELECT id
+      FROM appointments
+      WHERE appointment_date = ?
+        AND appointment_time = ?
+        AND status != 'cancelled'
+    `).get(appointmentDate, appointmentTime);
+
+    if (existingAppointment) {
+      return res.status(409).json({
+        error: "That time slot is already booked. Please choose another time."
+      });
+    }
+
+    // Save the customer and appointment together
+    const createBooking = db.transaction(() => {
+      const customerResult = db.prepare(`
+        INSERT INTO customers (name, phone, email)
+        VALUES (?, ?, ?)
+      `).run(
+        customerName.trim(),
+        phone.trim(),
+        typeof email === "string" && email.trim()
+          ? email.trim()
+          : null
+      );
+
+      const appointmentResult = db.prepare(`
+        INSERT INTO appointments (
+          customer_id,
+          service_id,
+          appointment_date,
+          appointment_time,
+          status
+        )
+        VALUES (?, ?, ?, ?, 'pending')
+      `).run(
+        customerResult.lastInsertRowid,
+        Number(serviceId),
+        appointmentDate,
+        appointmentTime
+      );
+
+      return appointmentResult.lastInsertRowid;
+    });
+
+    const appointmentId = createBooking();
+
+    return res.status(201).json({
+      message: "Booking submitted successfully. Awaiting salon confirmation.",
+      appointmentId,
+      status: "pending"
+    });
+  } catch (error) {
+    console.error("Booking error:", error);
+
+    return res.status(500).json({
+      error: "Could not save your booking. Please try again."
+    });
+  }
+});
+
+// PRIVATE: Get appointments for the salon owner
+app.get(
+  "/api/appointments",
+  requireOwner,
+  (req, res) => {
+    try {
+      const appointments = db.prepare(`
+        SELECT
+          appointments.id,
+          customers.name AS customer_name,
+          customers.phone AS customer_phone,
+          customers.email AS customer_email,
+          services.name AS service_name,
+          services.price AS service_price,
+          appointments.appointment_date,
+          appointments.appointment_time,
+          appointments.status
+        FROM appointments
+        JOIN customers
+          ON appointments.customer_id = customers.id
+        JOIN services
+          ON appointments.service_id = services.id
+        ORDER BY
+          appointments.appointment_date,
+          appointments.appointment_time
+      `).all();
+
+      return res.json(appointments);
+    } catch (error) {
+      console.error("Error loading appointments:", error);
+
+      return res.status(500).json({
+        error: "Could not load appointments."
+      });
+    }
+  }
+);
+
+// PRIVATE: Update appointment status
+app.patch(
+  "/api/appointments/:id",
+  requireOwner,
+  (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const { status } = req.body ?? {};
+
+      const allowedStatuses = [
+        "pending",
+        "confirmed",
+        "cancelled"
+      ];
+
+      if (!Number.isInteger(id) || id < 1) {
+        return res.status(400).json({
+          error: "Invalid appointment ID."
+        });
+      }
+
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          error: "Invalid appointment status."
+        });
+      }
+
+      const result = db.prepare(`
+        UPDATE appointments
+        SET status = ?
+        WHERE id = ?
+      `).run(status, id);
+
+      if (result.changes === 0) {
+        return res.status(404).json({
+          error: "Appointment not found."
+        });
+      }
+
+      return res.json({
+        message: "Appointment status updated successfully.",
+        id,
+        status
+      });
+    } catch (error) {
+      console.error("Error updating appointment:", error);
+
+      return res.status(500).json({
+        error: "Could not update appointment status."
+      });
+    }
+  }
+);
+
+// Start backend
+app.listen(PORT, () => {
+  console.log(
+    `SalonHub backend running at http://localhost:${PORT}`
+  );
+});

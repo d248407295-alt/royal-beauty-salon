@@ -1,0 +1,3164 @@
+import { useCallback, useEffect, useState } from "react";
+import "./App.css";
+
+const API_URL = "http://localhost:5000/api";
+
+const emptyBookingForm = {
+  customerName: "",
+  phone: "",
+  email: "",
+  date: "",
+  time: "",
+  workerId: "",
+};
+
+const emptyServiceForm = {
+  name: "",
+  description: "",
+  price: "",
+  image: "",
+  duration_minutes: "60",
+};
+
+const emptyWorkerForm = {
+  name: "",
+  email: "",
+  password: "",
+  phone: "",
+  photo: "",
+  specialties: "",
+  experience: "",
+  bio: "",
+  serviceIds: [],
+};
+
+function formatPrice(price) {
+  return `KSh ${Number(price || 0).toLocaleString("en-KE")}`;
+}
+
+function formatStatus(status) {
+  const value = String(status || "pending");
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+}
+
+function getErrorMessage(error) {
+  return error instanceof Error
+    ? error.message
+    : "Something went wrong. Please try again.";
+}
+
+async function apiRequest(path, options = {}) {
+  let response;
+
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...options.headers,
+      },
+    });
+  } catch {
+    throw new Error(
+      "Cannot connect to the salon server. Make sure the backend is running on port 5000."
+    );
+  }
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(
+      data.error || data.message || `Server error ${response.status}.`
+    );
+  }
+
+  return data;
+}
+
+function getImageUrl(url) {
+  return typeof url === "string" ? url.trim() : "";
+}
+
+function WorkerPhoto({ worker, className = "" }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const photo = getImageUrl(worker?.photo_url || worker?.photo);
+
+  if (!photo || imageFailed) {
+    return (
+      <div className={`worker-avatar worker-avatar-placeholder ${className}`}>
+        ✂
+      </div>
+    );
+  }
+
+  return (
+    <img
+      className={`worker-avatar ${className}`}
+      src={photo}
+      alt={worker?.name || "Salon worker"}
+      loading="lazy"
+      onError={() => setImageFailed(true)}
+    />
+  );
+}
+
+function WorkerCard({ worker, onBook }) {
+  return (
+    <article className="worker-card" key={worker.id}>
+      <WorkerPhoto worker={worker} />
+
+      <div className="worker-card-content">
+        <p className="worker-label">OUR TEAM</p>
+        <h3>{worker.name}</h3>
+
+        {worker.specialties && (
+          <p className="worker-specialties">{worker.specialties}</p>
+        )}
+
+        {worker.experience !== undefined &&
+          worker.experience !== null &&
+          worker.experience !== "" && (
+            <p className="worker-experience">
+              {worker.experience}{" "}
+              {Number(worker.experience) === 1 ? "year" : "years"} of experience
+            </p>
+          )}
+
+        {worker.bio && <p className="worker-bio">{worker.bio}</p>}
+
+        <button
+          type="button"
+          className="small-button"
+          onClick={() => onBook(worker)}
+        >
+          Book with {worker.name.split(" ")[0]}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+export default function App() {
+  const [page, setPage] = useState("home");
+
+  // Public information
+  const [services, setServices] = useState([]);
+  const [workers, setWorkers] = useState([]);
+  const [appointments, setAppointments] = useState([]);
+
+  const [loadingServices, setLoadingServices] = useState(true);
+  const [loadingWorkers, setLoadingWorkers] = useState(true);
+  const [loadingAppointments, setLoadingAppointments] = useState(false);
+
+  // Customer booking
+const [selectedService, setSelectedService] = useState(null);
+const [bookingForm, setBookingForm] = useState(emptyBookingForm);
+const [submitting, setSubmitting] = useState(false);
+const [availableTimes, setAvailableTimes] = useState([]);
+const [loadingAvailability, setLoadingAvailability] = useState(false);
+
+  // Owner authentication
+  const [ownerEmail, setOwnerEmail] = useState("");
+  const [ownerPassword, setOwnerPassword] = useState("");
+  const [ownerToken, setOwnerToken] = useState("");
+  const [ownerLoggedIn, setOwnerLoggedIn] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
+
+  // Owner account settings
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newOwnerEmail, setNewOwnerEmail] = useState("");
+  const [newOwnerPassword, setNewOwnerPassword] = useState("");
+  const [savingCredentials, setSavingCredentials] = useState(false);
+
+  // Service management
+  const [serviceForm, setServiceForm] = useState(emptyServiceForm);
+  const [editingServiceId, setEditingServiceId] = useState(null);
+  const [savingService, setSavingService] = useState(false);
+  const [deletingServiceId, setDeletingServiceId] = useState(null);
+
+  // Worker management
+  const [workerForm, setWorkerForm] = useState(emptyWorkerForm);
+  const [editingWorkerId, setEditingWorkerId] = useState(null);
+  const [savingWorker, setSavingWorker] = useState(false);
+  const [loadingManagedWorkers, setLoadingManagedWorkers] = useState(false);
+  const [managedWorkers, setManagedWorkers] = useState([]);
+  const [workerServiceSelections, setWorkerServiceSelections] = useState({});
+  const [savingWorkerServicesId, setSavingWorkerServicesId] = useState(null);
+  const [updatingWorkerId, setUpdatingWorkerId] = useState(null);
+
+  // Worker authentication and profile
+  const [workerEmail, setWorkerEmail] = useState("");
+  const [workerPassword, setWorkerPassword] = useState("");
+  const [workerToken, setWorkerToken] = useState("");
+  const [workerLoggedIn, setWorkerLoggedIn] = useState(false);
+  const [workerProfile, setWorkerProfile] = useState(null);
+  const [workerAppointments, setWorkerAppointments] = useState([]);
+  const [workerLoggingIn, setWorkerLoggingIn] = useState(false);
+  const [loadingWorkerAppointments, setLoadingWorkerAppointments] =
+    useState(false);
+  const [savingWorkerProfile, setSavingWorkerProfile] = useState(false);
+
+  // Shared status and notifications
+  const [updatingAppointmentId, setUpdatingAppointmentId] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [noticeType, setNoticeType] = useState("info");
+
+  function showMessage(message, type = "info") {
+    setNotice(message);
+    setNoticeType(type);
+  }
+
+  function clearMessage() {
+    setNotice("");
+    setNoticeType("info");
+  }
+
+  function requireOwner() {
+    if (!ownerLoggedIn || !ownerToken) {
+      setPage("login");
+      showMessage("Please sign in as the salon owner.", "error");
+      return false;
+    }
+
+    return true;
+  }
+
+  function requireWorker() {
+    if (!workerLoggedIn || !workerToken) {
+      setPage("worker-login");
+      showMessage("Please sign in using your worker account.", "error");
+      return false;
+    }
+
+    return true;
+  }
+
+  // ---------------------------------------------------------
+  // LOAD PUBLIC SERVICES
+  // ---------------------------------------------------------
+
+  const loadServices = useCallback(async () => {
+    setLoadingServices(true);
+
+    try {
+      const data = await apiRequest("/services");
+
+      if (!Array.isArray(data)) {
+        throw new Error("The server returned an invalid services list.");
+      }
+
+      setServices(data);
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setLoadingServices(false);
+    }
+  }, []);
+
+  // ---------------------------------------------------------
+  // LOAD PUBLIC ACTIVE WORKERS
+  // ---------------------------------------------------------
+
+  const loadWorkers = useCallback(async () => {
+    setLoadingWorkers(true);
+
+    try {
+      const data = await apiRequest("/workers");
+
+      if (!Array.isArray(data)) {
+        throw new Error("The server returned an invalid workers list.");
+      }
+
+      setWorkers(data);
+    } catch (error) {
+      setWorkers([]);
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setLoadingWorkers(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadServices();
+    loadWorkers();
+  }, [loadServices, loadWorkers]);
+
+  // ---------------------------------------------------------
+  // OWNER APPOINTMENTS
+  // ---------------------------------------------------------
+
+  const loadAppointments = useCallback(async () => {
+    if (!ownerToken || !ownerLoggedIn) {
+      setAppointments([]);
+      return;
+    }
+
+    setLoadingAppointments(true);
+
+    try {
+      const data = await apiRequest("/appointments", {
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+        },
+      });
+
+      if (!Array.isArray(data)) {
+        throw new Error("The server returned an invalid appointments list.");
+      }
+
+      setAppointments(
+        data.map((item) => ({
+          id: item.id,
+          customerName: item.customer_name,
+          phone: item.customer_phone,
+          email: item.customer_email,
+          style: item.service_name,
+          price: Number(item.service_price || 0),
+          date: item.appointment_date,
+          time: item.appointment_time,
+          status: formatStatus(item.status),
+          workerName: item.worker_name || "Not assigned",
+        }))
+      );
+    } catch (error) {
+      const message = getErrorMessage(error).toLowerCase();
+
+      if (
+        message.includes("token") ||
+        message.includes("unauthorized") ||
+        message.includes("expired") ||
+        message.includes("session") ||
+        message.includes("log in as the salon owner")
+      ) {
+        setOwnerToken("");
+        setOwnerLoggedIn(false);
+        setAppointments([]);
+        setPage("login");
+
+        showMessage(
+          "Your login session is no longer valid. Please sign in again.",
+          "error"
+        );
+      } else {
+        showMessage(getErrorMessage(error), "error");
+      }
+    } finally {
+      setLoadingAppointments(false);
+    }
+  }, [ownerToken, ownerLoggedIn]);
+
+  useEffect(() => {
+    if (page === "owner" && ownerLoggedIn && ownerToken) {
+      loadAppointments();
+    }
+  }, [page, ownerLoggedIn, ownerToken, loadAppointments]);
+
+  // ---------------------------------------------------------
+  // CUSTOMER BOOKING
+  // ---------------------------------------------------------
+
+ function openBooking(service, worker = null) {
+  setSelectedService(service);
+  setAvailableTimes([]);
+
+  setBookingForm({
+    ...emptyBookingForm,
+    workerId: worker ? String(worker.id) : "",
+  });
+
+  clearMessage();
+}
+function closeBooking() {
+  if (submitting) return;
+
+  setSelectedService(null);
+  setBookingForm(emptyBookingForm);
+  setAvailableTimes([]);
+  setLoadingAvailability(false);
+}
+async function loadAvailableTimes(date, workerId = "") {
+  if (!selectedService || !date) {
+    setAvailableTimes([]);
+    return;
+  }
+
+  setLoadingAvailability(true);
+  setAvailableTimes([]);
+
+  try {
+    const params = new URLSearchParams({
+      date,
+      serviceId: String(selectedService.id),
+    });
+
+    if (workerId) {
+      params.set("workerId", workerId);
+    }
+
+    const result = await apiRequest(
+      `/availability?${params.toString()}`
+    );
+
+    setAvailableTimes(result.availableTimes || []);
+  } catch (error) {
+    setAvailableTimes([]);
+    showMessage(
+      getErrorMessage(error) || "Could not load available times.",
+      "error"
+    );
+  } finally {
+    setLoadingAvailability(false);
+  }
+}
+
+  async function submitBooking(event) {
+    event.preventDefault();
+
+    if (!selectedService) {
+      showMessage("Please select a salon service first.", "error");
+      return;
+    }
+
+    if (
+      !bookingForm.customerName.trim() ||
+      !bookingForm.phone.trim() ||
+      !bookingForm.email.trim() ||
+      !bookingForm.date ||
+      !bookingForm.time
+    ) {
+      showMessage("Please complete all the booking fields.", "error");
+      return;
+    }
+
+    setSubmitting(true);
+    clearMessage();
+
+    try {
+      const result = await apiRequest("/appointments", {
+        method: "POST",
+        body: JSON.stringify({
+          customerName: bookingForm.customerName.trim(),
+          phone: bookingForm.phone.trim(),
+          email: bookingForm.email.trim(),
+          serviceId: Number(selectedService.id),
+          appointmentDate: bookingForm.date,
+          appointmentTime: bookingForm.time,
+          workerId: bookingForm.workerId
+            ? Number(bookingForm.workerId)
+            : null,
+        }),
+      });
+
+      setSelectedService(null);
+      setBookingForm(emptyBookingForm);
+
+      showMessage(
+        result.message ||
+          `Your booking request has been submitted${
+            result.workerName ? ` with ${result.workerName}` : ""
+          }. It is pending the salon owner's review.`,
+        "success"
+      );
+
+      if (page === "owner" && ownerLoggedIn) {
+        await loadAppointments();
+      }
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // ---------------------------------------------------------
+  // OWNER LOGIN
+  // ---------------------------------------------------------
+
+  async function handleOwnerLogin(event) {
+    event.preventDefault();
+
+    if (loggingIn) return;
+
+    const email = ownerEmail.trim();
+
+    if (!email || !ownerPassword) {
+      showMessage("Please enter your email and password.", "error");
+      return;
+    }
+
+    setLoggingIn(true);
+    clearMessage();
+
+    try {
+      const data = await apiRequest("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email,
+          password: ownerPassword,
+        }),
+      });
+
+      if (!data.token) {
+        throw new Error("The server did not return a login token.");
+      }
+
+      setOwnerToken(data.token);
+      setOwnerLoggedIn(true);
+      setOwnerEmail(data.owner?.email || email);
+      setOwnerPassword("");
+      setAppointments([]);
+      setPage("owner");
+
+      showMessage("Login successful. Welcome to your dashboard.", "success");
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  // ---------------------------------------------------------
+  // OWNER SETTINGS
+  // ---------------------------------------------------------
+
+  function openSettings() {
+    if (!requireOwner()) return;
+
+    setCurrentPassword("");
+    setNewOwnerEmail("");
+    setNewOwnerPassword("");
+    clearMessage();
+    setPage("settings");
+  }
+
+  async function handleUpdateCredentials(event) {
+    event.preventDefault();
+
+    if (!requireOwner()) return;
+
+    if (!currentPassword) {
+      showMessage("Enter your current password.", "error");
+      return;
+    }
+
+    if (!newOwnerEmail.trim() && !newOwnerPassword) {
+      showMessage("Enter a new email address or password.", "error");
+      return;
+    }
+
+    if (newOwnerPassword && newOwnerPassword.length < 8) {
+      showMessage(
+        "Your new password must contain at least 8 characters.",
+        "error"
+      );
+      return;
+    }
+
+    setSavingCredentials(true);
+    clearMessage();
+
+    try {
+      const body = { currentPassword };
+
+      if (newOwnerEmail.trim()) {
+        body.newEmail = newOwnerEmail.trim();
+      }
+
+      if (newOwnerPassword) {
+        body.newPassword = newOwnerPassword;
+      }
+
+      const data = await apiRequest("/auth/credentials", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      setOwnerToken("");
+      setOwnerLoggedIn(false);
+      setOwnerPassword("");
+      setCurrentPassword("");
+      setNewOwnerPassword("");
+      setNewOwnerEmail("");
+      setAppointments([]);
+      setOwnerEmail(data.owner?.email || "");
+      setPage("login");
+
+      showMessage(
+        "Login details updated. Sign in again using your updated details.",
+        "success"
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setSavingCredentials(false);
+    }
+  }
+
+  function handleOwnerLogout() {
+    setOwnerLoggedIn(false);
+    setOwnerToken("");
+    setOwnerEmail("");
+    setOwnerPassword("");
+    setCurrentPassword("");
+    setNewOwnerEmail("");
+    setNewOwnerPassword("");
+    setAppointments([]);
+    setManagedWorkers([]);
+    setPage("home");
+
+    showMessage("You have logged out successfully.", "success");
+  }
+
+  // ---------------------------------------------------------
+  // OWNER SERVICE MANAGEMENT
+  // ---------------------------------------------------------
+
+  function openServicesManagement() {
+    if (!requireOwner()) return;
+
+    setServiceForm(emptyServiceForm);
+    setEditingServiceId(null);
+    clearMessage();
+    setPage("services-management");
+    loadServices();
+  }
+
+  function handleServiceFormChange(event) {
+    const { name, value } = event.target;
+
+    setServiceForm((previous) => ({
+      ...previous,
+      [name]: value,
+    }));
+  }
+
+  function startEditingService(service) {
+    setEditingServiceId(service.id);
+
+    setServiceForm({
+      name: service.name || "",
+      description: service.description || "",
+      price: String(service.price ?? ""),
+      image: service.image || "",
+      duration_minutes: String(service.duration_minutes ?? 60),
+    });
+
+    clearMessage();
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  function cancelServiceEdit() {
+    setEditingServiceId(null);
+    setServiceForm(emptyServiceForm);
+    clearMessage();
+  }
+
+  async function handleSaveService(event) {
+    event.preventDefault();
+
+    if (!requireOwner()) return;
+
+    const name = serviceForm.name.trim();
+    const price = Number(serviceForm.price);
+    const duration = Number(serviceForm.duration_minutes);
+
+    if (!name) {
+      showMessage("Enter the service name.", "error");
+      return;
+    }
+
+    if (
+      serviceForm.price === "" ||
+      !Number.isFinite(price) ||
+      price < 0
+    ) {
+      showMessage("Enter a valid, non-negative service price.", "error");
+      return;
+    }
+
+    if (
+      !Number.isInteger(duration) ||
+      duration < 1 ||
+      duration > 1440
+    ) {
+      showMessage("Duration must be between 1 and 1440 minutes.", "error");
+      return;
+    }
+
+    setSavingService(true);
+    clearMessage();
+
+    try {
+      const payload = {
+        name,
+        description: serviceForm.description.trim(),
+        price,
+        image: serviceForm.image.trim(),
+        duration_minutes: duration,
+      };
+
+      const isEditing = editingServiceId !== null;
+
+      const result = await apiRequest(
+        isEditing ? `/services/${editingServiceId}` : "/services",
+        {
+          method: isEditing ? "PUT" : "POST",
+          headers: {
+            Authorization: `Bearer ${ownerToken}`,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      setServiceForm(emptyServiceForm);
+      setEditingServiceId(null);
+
+      await loadServices();
+      await loadWorkers();
+
+      showMessage(
+        result.message ||
+          (isEditing ? "Service updated successfully." : "Service added."),
+        "success"
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setSavingService(false);
+    }
+  }
+
+  async function handleDeleteService(service) {
+    if (!requireOwner()) return;
+
+    const confirmed = window.confirm(
+      `Delete "${service.name}"?\n\nServices with existing appointments may not be deletable.`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingServiceId(service.id);
+    clearMessage();
+
+    try {
+      const result = await apiRequest(`/services/${service.id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+        },
+      });
+
+      if (editingServiceId === service.id) {
+        setEditingServiceId(null);
+        setServiceForm(emptyServiceForm);
+      }
+
+      await loadServices();
+      await loadWorkers();
+
+      showMessage(result.message || "Service deleted successfully.", "success");
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setDeletingServiceId(null);
+    }
+  }
+
+  // ---------------------------------------------------------
+  // OWNER WORKER MANAGEMENT
+  // ---------------------------------------------------------
+
+  const loadManagedWorkers = useCallback(async () => {
+    if (!ownerToken || !ownerLoggedIn) {
+      setManagedWorkers([]);
+      return;
+    }
+
+    setLoadingManagedWorkers(true);
+
+    try {
+      const data = await apiRequest("/workers/owner", {
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+        },
+      });
+
+      if (!Array.isArray(data)) {
+        throw new Error("The server returned an invalid worker list.");
+      }
+
+      setManagedWorkers(data);
+
+      const selections = {};
+
+      data.forEach((worker) => {
+        selections[worker.id] = Array.isArray(worker.service_ids)
+          ? worker.service_ids.map(Number)
+          : Array.isArray(worker.services)
+            ? worker.services.map((service) => Number(service.id))
+            : [];
+      });
+
+      setWorkerServiceSelections((previous) => ({
+        ...selections,
+        ...previous,
+      }));
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setLoadingManagedWorkers(false);
+    }
+  }, [ownerToken, ownerLoggedIn]);
+
+  useEffect(() => {
+    if (page === "workers-management" && ownerLoggedIn) {
+      loadManagedWorkers();
+    }
+  }, [page, ownerLoggedIn, loadManagedWorkers]);
+
+  function openWorkersManagement() {
+    if (!requireOwner()) return;
+
+    setWorkerForm(emptyWorkerForm);
+    setEditingWorkerId(null);
+    clearMessage();
+    setPage("workers-management");
+    loadManagedWorkers();
+  }
+
+  function handleWorkerFormChange(event) {
+    const { name, value } = event.target;
+
+    setWorkerForm((previous) => ({
+      ...previous,
+      [name]: value,
+    }));
+  }
+
+  function handleWorkerServiceSelection(serviceId) {
+    setWorkerForm((previous) => {
+      const current = previous.serviceIds;
+      const id = Number(serviceId);
+
+      return {
+        ...previous,
+        serviceIds: current.includes(id)
+          ? current.filter((item) => item !== id)
+          : [...current, id],
+      };
+    });
+  }
+
+  function startEditingWorker(worker) {
+    setEditingWorkerId(worker.id);
+
+    setWorkerForm({
+      name: worker.name || "",
+      email: worker.email || "",
+      password: "",
+      phone: worker.phone || "",
+      photo: worker.photo_url || worker.photo || "",
+      specialties: worker.specialties || "",
+      experience: String(worker.experience ?? ""),
+      bio: worker.bio || "",
+      serviceIds: Array.isArray(worker.service_ids)
+        ? worker.service_ids.map(Number)
+        : Array.isArray(worker.services)
+          ? worker.services.map((service) => Number(service.id))
+          : [],
+    });
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+
+    clearMessage();
+  }
+
+  function cancelWorkerEdit() {
+    setEditingWorkerId(null);
+    setWorkerForm(emptyWorkerForm);
+    clearMessage();
+  }
+
+  async function handleSaveWorker(event) {
+    event.preventDefault();
+
+    if (!requireOwner()) return;
+
+    const name = workerForm.name.trim();
+    const email = workerForm.email.trim();
+
+    if (!name || !email) {
+      showMessage("Enter the worker's name and email address.", "error");
+      return;
+    }
+
+    if (editingWorkerId === null && workerForm.password.length < 8) {
+      showMessage(
+        "Create a worker password with at least 8 characters.",
+        "error"
+      );
+      return;
+    }
+
+    if (
+      workerForm.experience !== "" &&
+      (!Number.isInteger(Number(workerForm.experience)) ||
+        Number(workerForm.experience) < 0 ||
+        Number(workerForm.experience) > 80)
+    ) {
+      showMessage(
+        "Experience must be a whole number between 0 and 80 years.",
+        "error"
+      );
+      return;
+    }
+
+    setSavingWorker(true);
+    clearMessage();
+
+    try {
+      const payload = {
+        name,
+        email,
+        phone: workerForm.phone.trim(),
+        photo: workerForm.photo.trim(),
+        specialties: workerForm.specialties.trim(),
+        experience:
+          workerForm.experience === "" ? 0 : Number(workerForm.experience),
+        bio: workerForm.bio.trim(),
+      };
+
+      if (workerForm.password) {
+        payload.password = workerForm.password;
+      }
+
+      let result;
+
+      if (editingWorkerId === null) {
+        payload.serviceIds = workerForm.serviceIds;
+
+        result = await apiRequest("/workers", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ownerToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+      } else {
+        // Update a worker's profile through the owner route if supported.
+        result = await apiRequest(`/workers/${editingWorkerId}`, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${ownerToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        await apiRequest(`/workers/${editingWorkerId}/services`, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${ownerToken}`,
+          },
+          body: JSON.stringify({
+            serviceIds: workerForm.serviceIds,
+          }),
+        });
+      }
+
+      setWorkerForm(emptyWorkerForm);
+      setEditingWorkerId(null);
+
+      await loadManagedWorkers();
+      await loadWorkers();
+
+      showMessage(
+        result.message ||
+          (editingWorkerId === null
+            ? "Worker account created successfully."
+            : "Worker profile updated successfully."),
+        "success"
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setSavingWorker(false);
+    }
+  }
+
+  async function saveWorkerServices(workerId) {
+    if (!requireOwner()) return;
+
+    setSavingWorkerServicesId(workerId);
+    clearMessage();
+
+    try {
+      const result = await apiRequest(`/workers/${workerId}/services`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+        },
+        body: JSON.stringify({
+          serviceIds: workerServiceSelections[workerId] || [],
+        }),
+      });
+
+      await loadManagedWorkers();
+
+      showMessage(
+        result.message || "Worker services updated successfully.",
+        "success"
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setSavingWorkerServicesId(null);
+    }
+  }
+
+  async function toggleWorkerStatus(worker) {
+    if (!requireOwner()) return;
+
+    const currentlyActive =
+      worker.is_active === 1 ||
+      worker.is_active === true ||
+      worker.status === "active";
+
+    const nextActive = !currentlyActive;
+
+    const confirmed = window.confirm(
+      `${nextActive ? "Activate" : "Deactivate"} ${worker.name}'s account?`
+    );
+
+    if (!confirmed) return;
+
+    setUpdatingWorkerId(worker.id);
+    clearMessage();
+
+    try {
+      const result = await apiRequest(`/workers/${worker.id}/status`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+        },
+        body: JSON.stringify({
+  is_active: nextActive,
+}),
+      });
+      await loadManagedWorkers();
+      await loadWorkers();
+
+      showMessage(
+        result.message ||
+          `${worker.name}'s account has been ${
+            nextActive ? "activated" : "deactivated"
+          }.`,
+        "success"
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setUpdatingWorkerId(null);
+    }
+  }
+
+  // ---------------------------------------------------------
+  // APPOINTMENT STATUS
+  // ---------------------------------------------------------
+
+  async function updateAppointmentStatus(id, status) {
+    if (!requireOwner()) return;
+
+    setUpdatingAppointmentId(id);
+    clearMessage();
+
+    try {
+      await apiRequest(`/appointments/${id}`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+        },
+        body: JSON.stringify({
+          status: status.toLowerCase(),
+        }),
+      });
+
+      showMessage("Appointment status updated successfully.", "success");
+      await loadAppointments();
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setUpdatingAppointmentId(null);
+    }
+  }
+
+  // ---------------------------------------------------------
+  // WORKER LOGIN
+  // ---------------------------------------------------------
+
+  async function handleWorkerLogin(event) {
+    event.preventDefault();
+
+    if (workerLoggingIn) return;
+
+    if (!workerEmail.trim() || !workerPassword) {
+      showMessage("Enter your worker email and password.", "error");
+      return;
+    }
+
+    setWorkerLoggingIn(true);
+    clearMessage();
+
+    try {
+      const data = await apiRequest("/workers/login", {
+        method: "POST",
+        body: JSON.stringify({
+          email: workerEmail.trim(),
+          password: workerPassword,
+        }),
+      });
+
+      if (!data.token) {
+        throw new Error("The server did not return a worker login token.");
+      }
+
+      setWorkerToken(data.token);
+      setWorkerLoggedIn(true);
+      setWorkerProfile(data.worker || null);
+      setWorkerPassword("");
+      setPage("worker-dashboard");
+
+      showMessage("Worker login successful.", "success");
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setWorkerLoggingIn(false);
+    }
+  }
+
+  const loadWorkerAppointments = useCallback(async () => {
+    if (!workerToken || !workerLoggedIn) {
+      setWorkerAppointments([]);
+      return;
+    }
+
+    setLoadingWorkerAppointments(true);
+
+    try {
+      const data = await apiRequest("/workers/me/appointments", {
+        headers: {
+          Authorization: `Bearer ${workerToken}`,
+        },
+      });
+
+      if (!Array.isArray(data)) {
+        throw new Error("The server returned an invalid appointments list.");
+      }
+
+      setWorkerAppointments(data);
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setLoadingWorkerAppointments(false);
+    }
+  }, [workerToken, workerLoggedIn]);
+
+  useEffect(() => {
+    if (page === "worker-dashboard" && workerLoggedIn) {
+      loadWorkerAppointments();
+    }
+  }, [page, workerLoggedIn, loadWorkerAppointments]);
+
+  async function handleSaveWorkerProfile(event) {
+    event.preventDefault();
+
+    if (!requireWorker()) return;
+
+    if (!workerProfile?.name?.trim()) {
+      showMessage("Enter your name.", "error");
+      return;
+    }
+
+    setSavingWorkerProfile(true);
+    clearMessage();
+
+    try {
+      const result = await apiRequest("/workers/me", {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${workerToken}`,
+        },
+        body: JSON.stringify({
+          name: workerProfile.name.trim(),
+          phone: workerProfile.phone || "",
+          photo: workerProfile.photo || workerProfile.photo_url || "",
+          specialties: workerProfile.specialties || "",
+          experience: Number(workerProfile.experience || 0),
+          bio: workerProfile.bio || "",
+        }),
+      });
+
+      if (result.worker) {
+        setWorkerProfile(result.worker);
+      }
+
+      await loadWorkers();
+
+      showMessage(
+        result.message || "Your profile has been updated.",
+        "success"
+      );
+    } catch (error) {
+      showMessage(getErrorMessage(error), "error");
+    } finally {
+      setSavingWorkerProfile(false);
+    }
+  }
+
+  function handleWorkerLogout() {
+    setWorkerLoggedIn(false);
+    setWorkerToken("");
+    setWorkerProfile(null);
+    setWorkerAppointments([]);
+    setWorkerEmail("");
+    setWorkerPassword("");
+    setPage("home");
+
+    showMessage("You have logged out successfully.", "success");
+  }
+
+  // ---------------------------------------------------------
+  // DASHBOARD COUNTS
+  // ---------------------------------------------------------
+
+  const pendingCount = appointments.filter(
+    (item) => item.status === "Pending"
+  ).length;
+
+  const confirmedCount = appointments.filter(
+    (item) => item.status === "Confirmed"
+  ).length;
+  // Active bookings exclude completed and cancelled appointments.
+const activeAppointments = appointments.filter(
+  (item) =>
+    item.status !== "Completed" &&
+    item.status !== "Cancelled"
+);
+
+// Completed appointments remain available for history.
+const completedAppointments = appointments.filter(
+  (item) => item.status === "Completed"
+);
+
+// Cancelled appointments remain available for reference.
+const cancelledAppointments = appointments.filter(
+  (item) => item.status === "Cancelled"
+);
+
+  const activeWorkerCount = managedWorkers.filter(
+    (worker) =>
+      worker.is_active === 1 ||
+      worker.is_active === true ||
+      worker.status === "active"
+  ).length;
+
+  // ---------------------------------------------------------
+  // PAGE LAYOUT
+  // ---------------------------------------------------------
+
+  return (
+    <div className="salon-app">
+      {/* HEADER */}
+      <header className="topbar">
+        <button
+          type="button"
+          className="brand"
+          onClick={() => {
+            setPage("home");
+            clearMessage();
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+        >
+          <span className="brand-icon">✦</span>
+          <span>
+            <strong>SalonHub</strong>
+            <small>Beauty &amp; style</small>
+          </span>
+        </button>
+
+        <nav className="main-nav">
+          <button
+            type="button"
+            className={page === "home" ? "nav-link active" : "nav-link"}
+            onClick={() => {
+              setPage("home");
+              clearMessage();
+            }}
+          >
+            Home
+          </button>
+
+          <button
+            type="button"
+            className="nav-link"
+            onClick={() => {
+              setPage("home");
+              clearMessage();
+
+              setTimeout(() => {
+                document
+                  .getElementById("services")
+                  ?.scrollIntoView({ behavior: "smooth" });
+              }, 100);
+            }}
+          >
+            Services
+          </button>
+
+          <button
+            type="button"
+            className="nav-link"
+            onClick={() => {
+              setPage("home");
+              clearMessage();
+
+              setTimeout(() => {
+                document
+                  .getElementById("team")
+                  ?.scrollIntoView({ behavior: "smooth" });
+              }, 100);
+            }}
+          >
+            Our team
+          </button>
+
+          <button
+            type="button"
+            className={
+              [
+                "owner",
+                "settings",
+                "services-management",
+                "workers-management",
+              ].includes(page)
+                ? "nav-link active"
+                : "nav-link"
+            }
+            onClick={() => {
+              clearMessage();
+              setPage(ownerLoggedIn ? "owner" : "login");
+            }}
+          >
+            Salon Owner
+          </button>
+
+          <button
+            type="button"
+            className={
+              ["worker-login", "worker-dashboard"].includes(page)
+                ? "nav-link active"
+                : "nav-link"
+            }
+            onClick={() => {
+              clearMessage();
+              setPage(workerLoggedIn ? "worker-dashboard" : "worker-login");
+            }}
+          >
+            Worker Login
+          </button>
+        </nav>
+      </header>
+
+      {/* NOTIFICATIONS */}
+      {notice && (
+        <div
+          className={`notice notice-${noticeType}`}
+          role={noticeType === "error" ? "alert" : "status"}
+          aria-live="polite"
+        >
+          <span>{notice}</span>
+
+          <button
+            type="button"
+            aria-label="Dismiss message"
+            onClick={clearMessage}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* =====================================================
+          CUSTOMER HOME
+      ====================================================== */}
+      {page === "home" && (
+        <main>
+          <section className="hero">
+            <div className="hero-content">
+              <p className="eyebrow">YOUR BEAUTY, YOUR STYLE</p>
+
+              <h1>
+                Feel beautiful.
+                <br />
+                <span>Book your next look.</span>
+              </h1>
+
+              <p className="hero-description">
+                Explore salon services, compare prices, meet our team, and
+                request an appointment with your preferred beauty professional.
+              </p>
+
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() =>
+                  document
+                    .getElementById("services")
+                    ?.scrollIntoView({ behavior: "smooth" })
+                }
+              >
+                Explore services →
+              </button>
+
+              <div className="hero-details">
+                <span>✦ Professional beauty services</span>
+                <span>✦ Choose your preferred worker</span>
+              </div>
+            </div>
+
+            <div className="hero-art" aria-label="Beauty salon illustration">
+              <div className="hero-circle">
+                <span>YOUR</span>
+                <strong>Beauty</strong>
+                <span>YOUR RULES</span>
+                <div className="hero-flower">✿</div>
+              </div>
+            </div>
+          </section>
+
+          {/* SERVICES */}
+          <section className="services-section" id="services">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">FIND YOUR LOOK</p>
+                <h2>Our services</h2>
+                <p>
+                  Choose a service and select the worker you would like.
+                </p>
+              </div>
+            </div>
+
+            {loadingServices ? (
+              <p className="empty-message">Loading services…</p>
+            ) : services.length === 0 ? (
+              <div className="empty-message">
+                <h3>No services available</h3>
+                <p>The salon owner can add services from the dashboard.</p>
+              </div>
+            ) : (
+              <div className="services-grid">
+                {services.map((service) => (
+                  <article className="service-card" key={service.id}>
+                    <div className="service-art">
+                      {service.image ? (
+                        <img
+                          src={service.image}
+                          alt={service.name}
+                          loading="lazy"
+                          onError={(event) => {
+                            event.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        <span>✿</span>
+                      )}
+                    </div>
+
+                    <div className="service-card-content">
+                      <p className="service-label">SALON SERVICE</p>
+                      <h3>{service.name}</h3>
+
+                      {service.description && <p>{service.description}</p>}
+
+                      <p className="service-duration">
+                        {service.duration_minutes
+                          ? `${service.duration_minutes} minutes`
+                          : "Duration available at salon"}
+                      </p>
+
+                      <div className="service-card-bottom">
+                        <strong>{formatPrice(service.price)}</strong>
+
+                        <button
+                          type="button"
+                          className="small-button"
+                          onClick={() => openBooking(service)}
+                        >
+                          Book now
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* WORKER PROFILES */}
+          <section className="services-section team-section" id="team">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">MEET OUR PROFESSIONALS</p>
+                <h2>Our beauty team</h2>
+                <p>
+                  Get to know our team and choose the person you would like to
+                  serve you.
+                </p>
+              </div>
+            </div>
+
+            {loadingWorkers ? (
+              <p className="empty-message">Loading our team…</p>
+            ) : workers.length === 0 ? (
+              <div className="empty-message">
+                <h3>Our team profiles are coming soon</h3>
+                <p>
+                  Active salon workers will appear here when the owner adds
+                  their profiles.
+                </p>
+              </div>
+            ) : (
+              <div className="workers-grid">
+                {workers.map((worker) => (
+                  <WorkerCard
+                    key={worker.id}
+                    worker={worker}
+                    onBook={() => {
+                      if (services.length === 0) {
+                        showMessage(
+                          "The salon has not added any services yet.",
+                          "error"
+                        );
+                        return;
+                      }
+
+                      setSelectedService(null);
+                      setBookingForm({
+                        ...emptyBookingForm,
+                        workerId: String(worker.id),
+                      });
+
+                      document
+                        .getElementById("services")
+                        ?.scrollIntoView({ behavior: "smooth" });
+
+                      showMessage(
+                        `Choose a service to book with ${worker.name}.`,
+                        "info"
+                      );
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* BOOKING INFORMATION */}
+          <section className="booking-info">
+            <span className="info-icon">♡</span>
+            <div>
+              <h2>How booking works</h2>
+              <p>
+                Select a service, choose a worker or select any available
+                worker, and enter your contact details. Your request remains
+                pending until the salon owner reviews it.
+              </p>
+            </div>
+          </section>
+        </main>
+      )}
+
+      {/* =====================================================
+          OWNER LOGIN
+      ====================================================== */}
+      {page === "login" && (
+        <main className="login-page">
+          <form className="login-card" onSubmit={handleOwnerLogin}>
+            <div className="login-icon">✦</div>
+            <p className="eyebrow">SALON MANAGEMENT</p>
+            <h1>Owner login</h1>
+            <p>Sign in to manage your salon and team.</p>
+
+            <label>
+              Email address
+              <input
+                type="email"
+                value={ownerEmail}
+                onChange={(event) => setOwnerEmail(event.target.value)}
+                placeholder="Enter owner email"
+                autoComplete="username"
+                required
+                disabled={loggingIn}
+              />
+            </label>
+
+            <label>
+              Password
+              <input
+                type="password"
+                value={ownerPassword}
+                onChange={(event) => setOwnerPassword(event.target.value)}
+                placeholder="Enter your password"
+                autoComplete="current-password"
+                required
+                disabled={loggingIn}
+              />
+            </label>
+
+            <button
+              className="primary-button full-button"
+              type="submit"
+              disabled={loggingIn}
+            >
+              {loggingIn ? "Signing in…" : "Sign in →"}
+            </button>
+
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                setPage("worker-login");
+                clearMessage();
+              }}
+            >
+              Are you a salon worker? Sign in here.
+            </button>
+          </form>
+        </main>
+      )}
+
+      {/* =====================================================
+          OWNER SETTINGS
+      ====================================================== */}
+      {page === "settings" && ownerLoggedIn && (
+        <main className="owner-page">
+          <div className="owner-heading">
+            <div>
+              <p className="eyebrow">ACCOUNT SECURITY</p>
+              <h1>Owner settings</h1>
+              <p>Update your salon owner login details.</p>
+            </div>
+
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                clearMessage();
+                setPage("owner");
+              }}
+            >
+              ← Back to dashboard
+            </button>
+          </div>
+
+          <section className="appointments-panel settings-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Change email or password</h2>
+                <p>
+                  Confirm your current password before saving. Leave a new
+                  field empty if you do not want to change it.
+                </p>
+              </div>
+            </div>
+
+            <form
+              className="booking-form settings-form"
+              onSubmit={handleUpdateCredentials}
+            >
+              <label>
+                Current password
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(event) =>
+                    setCurrentPassword(event.target.value)
+                  }
+                  autoComplete="current-password"
+                  required
+                />
+              </label>
+
+              <label>
+                New email address
+                <input
+                  type="email"
+                  value={newOwnerEmail}
+                  onChange={(event) => setNewOwnerEmail(event.target.value)}
+                  placeholder="Enter new email address"
+                  autoComplete="email"
+                />
+              </label>
+
+              <label>
+                New password
+                <input
+                  type="password"
+                  value={newOwnerPassword}
+                  onChange={(event) =>
+                    setNewOwnerPassword(event.target.value)
+                  }
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                  minLength={8}
+                />
+              </label>
+
+              <p className="form-disclaimer">
+                After saving, you must sign in again using your updated
+                credentials.
+              </p>
+
+              <button
+                type="submit"
+                className="primary-button full-button"
+                disabled={savingCredentials}
+              >
+                {savingCredentials ? "Saving changes…" : "Save login details"}
+              </button>
+            </form>
+          </section>
+        </main>
+      )}
+
+      {/* =====================================================
+          SERVICES MANAGEMENT
+      ====================================================== */}
+      {page === "services-management" && ownerLoggedIn && (
+        <main className="owner-page">
+          <div className="owner-heading">
+            <div>
+              <p className="eyebrow">SALON MANAGEMENT</p>
+              <h1>Services &amp; Prices</h1>
+              <p>Add services, update prices, and manage customer options.</p>
+            </div>
+
+            <div className="owner-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setPage("owner")}
+              >
+                ← Dashboard
+              </button>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={loadServices}
+                disabled={loadingServices}
+              >
+                {loadingServices ? "Refreshing…" : "↻ Refresh"}
+              </button>
+            </div>
+          </div>
+
+          <section className="appointments-panel service-management-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>
+                  {editingServiceId !== null
+                    ? "Edit service"
+                    : "Add a new service"}
+                </h2>
+                <p>Prices are in Kenyan shillings.</p>
+              </div>
+            </div>
+
+            <form
+              className="booking-form settings-form"
+              onSubmit={handleSaveService}
+            >
+              <label>
+                Service name *
+                <input
+                  type="text"
+                  name="name"
+                  value={serviceForm.name}
+                  onChange={handleServiceFormChange}
+                  placeholder="e.g. Knotless braids"
+                  maxLength={120}
+                  required
+                />
+              </label>
+
+              <label>
+                Description
+                <textarea
+                  name="description"
+                  value={serviceForm.description}
+                  onChange={handleServiceFormChange}
+                  placeholder="Describe the service"
+                  rows={3}
+                  maxLength={1000}
+                />
+              </label>
+
+              <div className="form-row">
+                <label>
+                  Price (KSh) *
+                  <input
+                    type="number"
+                    name="price"
+                    value={serviceForm.price}
+                    onChange={handleServiceFormChange}
+                    min="0"
+                    step="0.01"
+                    required
+                  />
+                </label>
+
+                <label>
+                  Duration (minutes) *
+                  <input
+                    type="number"
+                    name="duration_minutes"
+                    value={serviceForm.duration_minutes}
+                    onChange={handleServiceFormChange}
+                    min="1"
+                    max="1440"
+                    step="1"
+                    required
+                  />
+                </label>
+              </div>
+
+              <label>
+                Image URL (optional)
+                <input
+                  type="url"
+                  name="image"
+                  value={serviceForm.image}
+                  onChange={handleServiceFormChange}
+                  placeholder="https://example.com/style.jpg"
+                />
+              </label>
+
+              {serviceForm.image && (
+                <div className="service-image-preview">
+                  <p>Image preview</p>
+                  <img src={serviceForm.image} alt="Service preview" />
+                </div>
+              )}
+
+              <div className="owner-actions service-form-actions">
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={savingService}
+                >
+                  {savingService
+                    ? "Saving…"
+                    : editingServiceId !== null
+                      ? "Save changes"
+                      : "+ Add service"}
+                </button>
+
+                {editingServiceId !== null && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={cancelServiceEdit}
+                    disabled={savingService}
+                  >
+                    Cancel editing
+                  </button>
+                )}
+              </div>
+            </form>
+          </section>
+
+          <section className="appointments-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Current services</h2>
+                <p>
+                  {services.length}{" "}
+                  {services.length === 1 ? "service" : "services"} in your
+                  database.
+                </p>
+              </div>
+            </div>
+
+            {loadingServices ? (
+              <p className="empty-message">Loading services…</p>
+            ) : services.length === 0 ? (
+              <p className="empty-message">Add your first salon service.</p>
+            ) : (
+              <div className="managed-services-list">
+                {services.map((service) => (
+                  <article
+                    className="managed-service-card"
+                    key={service.id}
+                  >
+                    <div className="managed-service-image">
+                      {service.image ? (
+                        <img src={service.image} alt={service.name} />
+                      ) : (
+                        <span>✿</span>
+                      )}
+                    </div>
+
+                    <div className="managed-service-info">
+                      <h3>{service.name}</h3>
+                      <p>{service.description || "No description added."}</p>
+
+                      <div className="managed-service-meta">
+                        <strong>{formatPrice(service.price)}</strong>
+                        <span>{service.duration_minutes || 60} minutes</span>
+                      </div>
+                    </div>
+
+                    <div className="managed-service-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => startEditingService(service)}
+                        disabled={
+                          savingService ||
+                          deletingServiceId === service.id
+                        }
+                      >
+                        Edit
+                      </button>
+
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={() => handleDeleteService(service)}
+                        disabled={
+                          savingService ||
+                          deletingServiceId === service.id
+                        }
+                      >
+                        {deletingServiceId === service.id
+                          ? "Deleting…"
+                          : "Delete"}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        </main>
+      )}
+
+      {/* =====================================================
+          WORKER MANAGEMENT
+      ====================================================== */}
+      {page === "workers-management" && ownerLoggedIn && (
+        <main className="owner-page">
+          <div className="owner-heading">
+            <div>
+              <p className="eyebrow">SALON MANAGEMENT</p>
+              <h1>Manage workers</h1>
+              <p>
+                Create worker accounts, assign services, and manage access.
+              </p>
+            </div>
+
+            <div className="owner-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setPage("owner")}
+              >
+                ← Dashboard
+              </button>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={loadManagedWorkers}
+                disabled={loadingManagedWorkers}
+              >
+                {loadingManagedWorkers ? "Refreshing…" : "↻ Refresh"}
+              </button>
+            </div>
+          </div>
+
+          {/* CREATE OR EDIT WORKER */}
+          <section className="appointments-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>
+                  {editingWorkerId === null
+                    ? "Create a worker account"
+                    : "Edit worker profile"}
+                </h2>
+                <p>
+                  Workers can use their email and password to access their
+                  assigned appointments.
+                </p>
+              </div>
+            </div>
+
+            <form
+              className="booking-form settings-form"
+              onSubmit={handleSaveWorker}
+            >
+              <div className="form-row">
+                <label>
+                  Full name *
+                  <input
+                    type="text"
+                    name="name"
+                    value={workerForm.name}
+                    onChange={handleWorkerFormChange}
+                    placeholder="Worker's full name"
+                    maxLength={120}
+                    required
+                  />
+                </label>
+
+                <label>
+                  Email address *
+                  <input
+                    type="email"
+                    name="email"
+                    value={workerForm.email}
+                    onChange={handleWorkerFormChange}
+                    placeholder="worker@example.com"
+                    autoComplete="email"
+                    maxLength={150}
+                    required
+                  />
+                </label>
+              </div>
+
+              <label>
+                {editingWorkerId === null
+                  ? "Temporary login password *"
+                  : "New password (optional)"}
+                <input
+                  type="password"
+                  name="password"
+                  value={workerForm.password}
+                  onChange={handleWorkerFormChange}
+                  placeholder={
+                    editingWorkerId === null
+                      ? "At least 8 characters"
+                      : "Leave empty to keep current password"
+                  }
+                  autoComplete="new-password"
+                  minLength={editingWorkerId === null ? 8 : undefined}
+                  required={editingWorkerId === null}
+                />
+              </label>
+
+              <div className="form-row">
+                <label>
+                  Phone number
+                  <input
+                    type="tel"
+                    name="phone"
+                    value={workerForm.phone}
+                    onChange={handleWorkerFormChange}
+                    placeholder="Worker phone number"
+                    maxLength={30}
+                  />
+                </label>
+
+                <label>
+                  Years of experience
+                  <input
+                    type="number"
+                    name="experience"
+                    value={workerForm.experience}
+                    onChange={handleWorkerFormChange}
+                    placeholder="e.g. 3"
+                    min="0"
+                    max="80"
+                    step="1"
+                  />
+                </label>
+              </div>
+
+              <label>
+                Photo URL
+                <input
+                  type="url"
+                  name="photo"
+                  value={workerForm.photo}
+                  onChange={handleWorkerFormChange}
+                  placeholder="https://example.com/worker.jpg"
+                />
+              </label>
+
+              {workerForm.photo && (
+                <div className="service-image-preview">
+                  <p>Worker photo preview</p>
+                  <img src={workerForm.photo} alt="Worker preview" />
+                </div>
+              )}
+
+              <label>
+                Specialties
+                <input
+                  type="text"
+                  name="specialties"
+                  value={workerForm.specialties}
+                  onChange={handleWorkerFormChange}
+                  placeholder="e.g. Braiding, dreadlocks, nails"
+                  maxLength={300}
+                />
+              </label>
+
+              <label>
+                Short biography
+                <textarea
+                  name="bio"
+                  value={workerForm.bio}
+                  onChange={handleWorkerFormChange}
+                  placeholder="Introduce this worker to customers"
+                  rows={3}
+                  maxLength={1000}
+                />
+              </label>
+
+              <div className="worker-service-choices">
+                <h3>Services this worker can perform</h3>
+                <p>
+                  Select the services this worker specializes in. If your
+                  backend treats an empty list as all services, selecting none
+                  will allow all services.
+                </p>
+
+                {services.length === 0 ? (
+                  <p>No services available. Add services first.</p>
+                ) : (
+                  <div className="checkbox-grid">
+                    {services.map((service) => (
+                      <label className="checkbox-label" key={service.id}>
+                        <input
+                          type="checkbox"
+                          checked={workerForm.serviceIds.includes(
+                            Number(service.id)
+                          )}
+                          onChange={() =>
+                            handleWorkerServiceSelection(service.id)
+                          }
+                        />
+                        <span>
+                          {service.name} — {formatPrice(service.price)}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="owner-actions service-form-actions">
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={savingWorker}
+                >
+                  {savingWorker
+                    ? "Saving worker…"
+                    : editingWorkerId === null
+                      ? "+ Create worker account"
+                      : "Save worker changes"}
+                </button>
+
+                {editingWorkerId !== null && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={cancelWorkerEdit}
+                    disabled={savingWorker}
+                  >
+                    Cancel editing
+                  </button>
+                )}
+              </div>
+            </form>
+          </section>
+
+          {/* CURRENT WORKERS */}
+          <section className="appointments-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Salon workers</h2>
+                <p>
+                  {managedWorkers.length} worker accounts · {activeWorkerCount}{" "}
+                  active
+                </p>
+              </div>
+            </div>
+
+            {loadingManagedWorkers ? (
+              <p className="empty-message">Loading worker accounts…</p>
+            ) : managedWorkers.length === 0 ? (
+              <div className="empty-message">
+                <h3>No workers have been added yet.</h3>
+                <p>Use the form above to create your first worker account.</p>
+              </div>
+            ) : (
+              <div className="managed-workers-list">
+                {managedWorkers.map((worker) => {
+                  const isActive =
+                    worker.is_active === 1 ||
+                    worker.is_active === true ||
+                    worker.status === "active";
+
+                  const selectedServices =
+                    workerServiceSelections[worker.id] || [];
+
+                  return (
+                    <article
+                      className="managed-worker-card"
+                      key={worker.id}
+                    >
+                      <div className="managed-worker-header">
+                        <WorkerPhoto worker={worker} />
+
+                        <div className="managed-worker-info">
+                          <h3>{worker.name}</h3>
+                          <p>{worker.email}</p>
+                          <p>{worker.phone || "No phone added"}</p>
+
+                          <span
+                            className={`worker-status ${
+                              isActive ? "worker-status-active" : ""
+                            }`}
+                          >
+                            {isActive ? "Active" : "Inactive"}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="managed-worker-details">
+                        <p>
+                          <strong>Specialties:</strong>{" "}
+                          {worker.specialties || "Not specified"}
+                        </p>
+
+                        <p>
+                          <strong>Experience:</strong>{" "}
+                          {worker.experience ?? 0} years
+                        </p>
+
+                        <p>
+                          <strong>Bio:</strong>{" "}
+                          {worker.bio || "No biography added."}
+                        </p>
+                      </div>
+
+                      <div className="worker-service-choices">
+                        <h4>Assign services</h4>
+
+                        <div className="checkbox-grid">
+                          {services.map((service) => (
+                            <label
+                              className="checkbox-label"
+                              key={service.id}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedServices.includes(
+                                  Number(service.id)
+                                )}
+                                onChange={() => {
+                                  const id = Number(service.id);
+
+                                  setWorkerServiceSelections((previous) => {
+                                    const current = previous[worker.id] || [];
+
+                                    return {
+                                      ...previous,
+                                      [worker.id]: current.includes(id)
+                                        ? current.filter((item) => item !== id)
+                                        : [...current, id],
+                                    };
+                                  });
+                                }}
+                              />
+
+                              <span>{service.name}</span>
+                            </label>
+                          ))}
+                        </div>
+
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => saveWorkerServices(worker.id)}
+                          disabled={
+                            savingWorkerServicesId === worker.id
+                          }
+                        >
+                          {savingWorkerServicesId === worker.id
+                            ? "Saving services…"
+                            : "Save assigned services"}
+                        </button>
+                      </div>
+
+                      <div className="managed-service-actions">
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => startEditingWorker(worker)}
+                        >
+                          Edit profile
+                        </button>
+
+                        <button
+                          type="button"
+                          className={
+                            isActive ? "danger-button" : "primary-button"
+                          }
+                          onClick={() => toggleWorkerStatus(worker)}
+                          disabled={updatingWorkerId === worker.id}
+                        >
+                          {updatingWorkerId === worker.id
+                            ? "Updating…"
+                            : isActive
+                              ? "Deactivate account"
+                              : "Activate account"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          <p className="privacy-note">
+            Worker accounts are managed by the salon owner. Customers should
+            only see public profile information, not worker passwords or
+            private account details.
+          </p>
+        </main>
+      )}
+
+      {/* =====================================================
+          OWNER DASHBOARD
+      ====================================================== */}
+      {page === "owner" && ownerLoggedIn && (
+        <main className="owner-page">
+          <div className="owner-heading">
+            <div>
+              <p className="eyebrow">SALON MANAGEMENT</p>
+              <h1>Owner dashboard</h1>
+              <p>Manage bookings, workers, services, and account settings.</p>
+            </div>
+
+            <div className="owner-actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={openWorkersManagement}
+              >
+                👥 Manage workers
+              </button>
+
+              <button
+                type="button"
+                className="primary-button"
+                onClick={openServicesManagement}
+              >
+                ✂ Services &amp; Prices
+              </button>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={openSettings}
+              >
+                ⚙ Settings
+              </button>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={loadAppointments}
+                disabled={loadingAppointments}
+              >
+                {loadingAppointments ? "Refreshing…" : "↻ Refresh"}
+              </button>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleOwnerLogout}
+              >
+                Log out
+              </button>
+            </div>
+          </div>
+
+          <section className="stats-grid">
+            <article className="stat-card">
+              <span>Total appointments</span>
+              <strong>{activeAppointments.length}</strong>
+            </article>
+
+            <article className="stat-card">
+              <span>Pending requests</span>
+              <strong>{pendingCount}</strong>
+            </article>
+
+            <article className="stat-card">
+              <span>Confirmed</span>
+              <strong>{confirmedCount}</strong>
+            </article>
+
+            <article className="stat-card">
+              <span>Salon services</span>
+              <strong>{services.length}</strong>
+            </article>
+          </section>
+
+          <section className="appointments-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Customer bookings</h2>
+                <p>
+                  View the assigned worker and manage appointment status.
+                </p>
+              </div>
+            </div>
+
+            {loadingAppointments ? (
+              <p className="empty-message">Loading appointments…</p>
+            ) : activeAppointments.length === 0 ? (
+              <div className="empty-message">
+                <h3>No bookings found</h3>
+                <p>Customer booking requests will appear here.</p>
+              </div>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Customer</th>
+                      <th>Contact</th>
+                      <th>Service</th>
+                      <th>Worker</th>
+                      <th>Date</th>
+                      <th>Time</th>
+                      <th>Price</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {activeAppointments.map((appointment) => (
+                      <tr key={appointment.id}>
+                        <td className="customer-cell">
+                          {appointment.customerName}
+                        </td>
+
+                        <td>
+                          <div>{appointment.phone}</div>
+                          <small>{appointment.email}</small>
+                        </td>
+
+                        <td>{appointment.style}</td>
+                        <td>{appointment.workerName}</td>
+                        <td>{appointment.date}</td>
+                        <td>{appointment.time}</td>
+                        <td>{formatPrice(appointment.price)}</td>
+
+                        <td>
+                          <select
+                            className={`status-select ${appointment.status.toLowerCase()}`}
+                            value={appointment.status}
+                            disabled={
+                              updatingAppointmentId === appointment.id
+                            }
+                            onChange={(event) =>
+                              updateAppointmentStatus(
+                                appointment.id,
+                                event.target.value
+                              )
+                            }
+                            aria-label={`Status for ${appointment.customerName}`}
+                          > 
+                          <option value="Pending">Pending</option>
+<option value="Confirmed">Confirmed</option>
+<option value="Completed">Completed</option>
+<option value="Cancelled">Cancelled</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          {/* COMPLETED APPOINTMENTS HISTORY */}
+<section className="appointments-panel">
+  <div className="panel-heading">
+    <div>
+      <h2>Completed appointments</h2>
+      <p>Appointments where the salon service has been completed.</p>
+    </div>
+  </div>
+
+  {completedAppointments.length === 0 ? (
+    <p className="empty-message">
+      No completed appointments yet.
+    </p>
+  ) : (
+    <div className="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Customer</th>
+            <th>Service</th>
+            <th>Worker</th>
+            <th>Date</th>
+            <th>Time</th>
+            <th>Price</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {completedAppointments.map((appointment) => (
+            <tr key={appointment.id}>
+              <td className="customer-cell">
+                {appointment.customerName}
+              </td>
+              <td>{appointment.style}</td>
+              <td>{appointment.workerName}</td>
+              <td>{appointment.date}</td>
+              <td>{appointment.time}</td>
+              <td>{formatPrice(appointment.price)}</td>
+              <td>
+                <span className="status-select completed">
+                  Completed
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</section>
+
+{/* CANCELLED APPOINTMENTS HISTORY */}
+<section className="appointments-panel">
+  <div className="panel-heading">
+    <div>
+      <h2>Cancelled appointments</h2>
+      <p>Cancelled bookings retained for reference.</p>
+    </div>
+  </div>
+
+  {cancelledAppointments.length === 0 ? (
+    <p className="empty-message">
+      No cancelled appointments.
+    </p>
+  ) : (
+    <div className="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Customer</th>
+            <th>Service</th>
+            <th>Date</th>
+            <th>Time</th>
+            <th>Price</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {cancelledAppointments.map((appointment) => (
+            <tr key={appointment.id}>
+              <td className="customer-cell">
+                {appointment.customerName}
+              </td>
+              <td>{appointment.style}</td>
+              <td>{appointment.date}</td>
+              <td>{appointment.time}</td>
+              <td>{formatPrice(appointment.price)}</td>
+              <td>
+                <span className="status-select cancelled">
+                  Cancelled
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</section>
+
+          <p className="privacy-note">
+            Customer contact information is retrieved from owner-protected
+            backend routes.
+          </p>
+        </main>
+      )}
+
+      {/* =====================================================
+          WORKER LOGIN
+      ====================================================== */}
+      {page === "worker-login" && (
+        <main className="login-page">
+          <form className="login-card" onSubmit={handleWorkerLogin}>
+            <div className="login-icon">✂</div>
+            <p className="eyebrow">SALON TEAM</p>
+            <h1>Worker login</h1>
+            <p>Sign in to see your assigned appointments.</p>
+
+            <label>
+              Email address
+              <input
+                type="email"
+                value={workerEmail}
+                onChange={(event) => setWorkerEmail(event.target.value)}
+                placeholder="Enter your worker email"
+                autoComplete="username"
+                required
+                disabled={workerLoggingIn}
+              />
+            </label>
+
+            <label>
+              Password
+              <input
+                type="password"
+                value={workerPassword}
+                onChange={(event) => setWorkerPassword(event.target.value)}
+                placeholder="Enter your password"
+                autoComplete="current-password"
+                required
+                disabled={workerLoggingIn}
+              />
+            </label>
+
+            <button
+              className="primary-button full-button"
+              type="submit"
+              disabled={workerLoggingIn}
+            >
+              {workerLoggingIn ? "Signing in…" : "Sign in →"}
+            </button>
+
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                setPage("login");
+                clearMessage();
+              }}
+            >
+              ← Return to owner login
+            </button>
+          </form>
+        </main>
+      )}
+
+      {/* =====================================================
+          WORKER DASHBOARD
+      ====================================================== */}
+      {page === "worker-dashboard" && workerLoggedIn && (
+        <main className="owner-page">
+          <div className="owner-heading">
+            <div>
+              <p className="eyebrow">SALON TEAM</p>
+              <h1>
+                Welcome, {workerProfile?.name || "Worker"}
+              </h1>
+              <p>View your assigned appointments and manage your profile.</p>
+            </div>
+
+            <div className="owner-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={loadWorkerAppointments}
+                disabled={loadingWorkerAppointments}
+              >
+                {loadingWorkerAppointments ? "Refreshing…" : "↻ Refresh"}
+              </button>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleWorkerLogout}
+              >
+                Log out
+              </button>
+            </div>
+          </div>
+
+          <section className="appointments-panel worker-profile-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Your public profile</h2>
+                <p>
+                  These details may appear on the customer-facing team page.
+                </p>
+              </div>
+            </div>
+
+            <form
+              className="booking-form settings-form"
+              onSubmit={handleSaveWorkerProfile}
+            >
+              <label>
+                Full name
+                <input
+                  type="text"
+                  value={workerProfile?.name || ""}
+                  onChange={(event) =>
+                    setWorkerProfile((previous) => ({
+                      ...previous,
+                      name: event.target.value,
+                    }))
+                  }
+                  required
+                />
+              </label>
+
+              <label>
+                Phone number
+                <input
+                  type="tel"
+                  value={workerProfile?.phone || ""}
+                  onChange={(event) =>
+                    setWorkerProfile((previous) => ({
+                      ...previous,
+                      phone: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Photo URL
+                <input
+                  type="url"
+                  value={
+                    workerProfile?.photo_url ||
+                    workerProfile?.photo ||
+                    ""
+                  }
+                  onChange={(event) =>
+                    setWorkerProfile((previous) => ({
+                      ...previous,
+                      photo: event.target.value,
+                      photo_url: event.target.value,
+                    }))
+                  }
+                  placeholder="https://example.com/your-photo.jpg"
+                />
+              </label>
+
+              <label>
+                Specialties
+                <input
+                  type="text"
+                  value={workerProfile?.specialties || ""}
+                  onChange={(event) =>
+                    setWorkerProfile((previous) => ({
+                      ...previous,
+                      specialties: event.target.value,
+                    }))
+                  }
+                  placeholder="e.g. Braiding, nails"
+                />
+              </label>
+
+              <label>
+                Years of experience
+                <input
+                  type="number"
+                  min="0"
+                  max="80"
+                  value={workerProfile?.experience ?? 0}
+                  onChange={(event) =>
+                    setWorkerProfile((previous) => ({
+                      ...previous,
+                      experience: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                Biography
+                <textarea
+                  rows={3}
+                  maxLength={1000}
+                  value={workerProfile?.bio || ""}
+                  onChange={(event) =>
+                    setWorkerProfile((previous) => ({
+                      ...previous,
+                      bio: event.target.value,
+                    }))
+                  }
+                  placeholder="Tell customers about your skills"
+                />
+              </label>
+
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={savingWorkerProfile}
+              >
+                {savingWorkerProfile ? "Saving profile…" : "Save profile"}
+              </button>
+            </form>
+          </section>
+
+          <section className="appointments-panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Your assigned appointments</h2>
+                <p>Only appointments returned by your worker account appear.</p>
+              </div>
+            </div>
+
+            {loadingWorkerAppointments ? (
+              <p className="empty-message">Loading your appointments…</p>
+            ) : workerAppointments.length === 0 ? (
+              <div className="empty-message">
+                <h3>No assigned appointments</h3>
+                <p>Your assigned appointments will appear here.</p>
+              </div>
+            ) : (
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Customer</th>
+                      <th>Service</th>
+                      <th>Date</th>
+                      <th>Time</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {workerAppointments.map((appointment) => (
+                      <tr key={appointment.id}>
+                        <td>
+                          {appointment.customer_name ||
+                            appointment.customerName ||
+                            "Customer"}
+                        </td>
+                        <td>
+                          {appointment.service_name ||
+                            appointment.style ||
+                            "Service"}
+                        </td>
+                        <td>
+                          {appointment.appointment_date ||
+                            appointment.date ||
+                            ""}
+                        </td>
+                        <td>
+                          {appointment.appointment_time ||
+                            appointment.time ||
+                            ""}
+                        </td>
+                        <td>
+                          {formatStatus(appointment.status)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </main>
+      )}
+
+      {/* =====================================================
+          AUTHENTICATION FALLBACK
+      ====================================================== */}
+      {[
+        "owner",
+        "settings",
+        "services-management",
+        "workers-management",
+      ].includes(page) &&
+        !ownerLoggedIn && (
+          <main className="login-page">
+            <div className="login-card">
+              <h1>Login required</h1>
+              <p>Please sign in to access salon management.</p>
+
+              <button
+                type="button"
+                className="primary-button full-button"
+                onClick={() => setPage("login")}
+              >
+                Go to owner login
+              </button>
+            </div>
+          </main>
+        )}
+
+      {page === "worker-dashboard" && !workerLoggedIn && (
+        <main className="login-page">
+          <div className="login-card">
+            <h1>Worker login required</h1>
+            <p>Please sign in to access your appointments.</p>
+
+            <button
+              type="button"
+              className="primary-button full-button"
+              onClick={() => setPage("worker-login")}
+            >
+              Go to worker login
+            </button>
+          </div>
+        </main>
+      )}
+
+      {/* FOOTER */}
+      <footer className="footer">
+        <button
+          type="button"
+          className="footer-brand"
+          onClick={() => {
+            setPage("home");
+            window.scrollTo({ top: 0, behavior: "smooth" });
+          }}
+        >
+          ✦ SalonHub
+        </button>
+
+        <p>Beauty made easier.</p>
+      </footer>
+
+      {/* =====================================================
+          CUSTOMER BOOKING MODAL
+      ====================================================== */}
+      {selectedService && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !submitting) {
+              closeBooking();
+            }
+          }}
+        >
+          <section
+            className="booking-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="booking-title"
+          >
+            <button
+              type="button"
+              className="close-button"
+              onClick={closeBooking}
+              disabled={submitting}
+              aria-label="Close booking form"
+            >
+              ×
+            </button>
+
+            <p className="eyebrow">BOOK YOUR APPOINTMENT</p>
+            <h2 id="booking-title">{selectedService.name}</h2>
+            <p className="modal-price">
+              {formatPrice(selectedService.price)}
+            </p>
+
+            <form className="booking-form" onSubmit={submitBooking}>
+              {/* WORKER SELECTION */}
+              <label>
+                Choose your beauty professional
+                <select
+                  value={bookingForm.workerId}
+                 onChange={(event) => {
+  const workerId = event.target.value;
+
+  setBookingForm((previous) => ({
+    ...previous,
+    workerId,
+    time: "",
+  }));
+
+  if (bookingForm.date) {
+    loadAvailableTimes(bookingForm.date, workerId);
+  } else {
+    setAvailableTimes([]);
+  }
+}}
+                >
+                  <option value="">Any available worker</option>
+
+                  {workers.map((worker) => (
+                    <option key={worker.id} value={worker.id}>
+                      {worker.name}
+                      {worker.specialties
+                        ? ` — ${worker.specialties}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <p className="form-disclaimer">
+                Choose a worker or select “Any available worker”. Your booking
+                will be checked against that worker's availability.
+              </p>
+
+              <label>
+                Full name
+                <input
+                  type="text"
+                  value={bookingForm.customerName}
+                  onChange={(event) =>
+                    setBookingForm((previous) => ({
+                      ...previous,
+                      customerName: event.target.value,
+                    }))
+                  }
+                  placeholder="Enter your full name"
+                  autoComplete="name"
+                  maxLength={120}
+                  required
+                />
+              </label>
+
+              <label>
+                Phone number
+                <input
+                  type="tel"
+                  value={bookingForm.phone}
+                  onChange={(event) =>
+                    setBookingForm((previous) => ({
+                      ...previous,
+                      phone: event.target.value,
+                    }))
+                  }
+                  placeholder="e.g. 07XXXXXXXX"
+                  autoComplete="tel"
+                  maxLength={30}
+                  required
+                />
+              </label>
+
+              <label>
+                Email address
+                <input
+                  type="email"
+                  value={bookingForm.email}
+                  onChange={(event) =>
+                    setBookingForm((previous) => ({
+                      ...previous,
+                      email: event.target.value,
+                    }))
+                  }
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                  maxLength={150}
+                  required
+                />
+              </label>
+
+              <div className="form-row">
+                <label>
+                  Preferred date
+                  <input
+                    type="date"
+                    value={bookingForm.date}
+                onChange={(event) => {
+  const date = event.target.value;
+
+  setBookingForm((previous) => ({
+    ...previous,
+    date,
+    time: "",
+  }));
+
+  if (date) {
+    loadAvailableTimes(date, bookingForm.workerId);
+  } else {
+    setAvailableTimes([]);
+  }
+}}
+                    min={new Date().toLocaleDateString("en-CA")}
+                    required
+                  />
+                </label>
+
+             
+             <label>
+  Available appointment times
+
+  <select
+    value={bookingForm.time}
+    onChange={(event) =>
+      setBookingForm((previous) => ({
+        ...previous,
+        time: event.target.value,
+      }))
+    }
+    disabled={!bookingForm.date || loadingAvailability}
+    required
+  >
+    <option value="">
+      {!bookingForm.date
+        ? "Choose a date first"
+        : loadingAvailability
+          ? "Checking available times..."
+          : availableTimes.length === 0
+            ? "No available times"
+            : "Select an available time"}
+    </option>
+
+    {availableTimes.map((time) => (
+      <option key={time} value={time}>
+        {time}
+      </option>
+    ))}
+  </select>
+</label>
+              </div>
+
+              <p className="form-disclaimer">
+                This submits an appointment request. The salon must review it
+                before it is confirmed.
+              </p>
+
+              <button
+                className="primary-button full-button"
+                type="submit"
+                disabled={submitting}
+              >
+                {submitting ? "Submitting…" : "Submit booking request →"}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
